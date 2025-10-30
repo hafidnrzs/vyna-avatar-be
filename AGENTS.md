@@ -29,6 +29,7 @@ uv sync
 ### 2. Configure Environment
 
 Copy `.env.example` to `.env.local` and set the following variables:
+
 - `LIVEKIT_URL`
 - `LIVEKIT_API_KEY`
 - `LIVEKIT_API_SECRET`

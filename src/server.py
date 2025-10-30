@@ -5,6 +5,7 @@ from typing import Optional
 
 from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException, Request
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from livekit import api
 from pydantic import BaseModel
@@ -12,6 +13,14 @@ from pydantic import BaseModel
 load_dotenv(".env.local")
 
 app = FastAPI()
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 LIVEKIT_URL = os.getenv("LIVEKIT_URL")
 API_KEY = os.getenv("LIVEKIT_API_KEY")
