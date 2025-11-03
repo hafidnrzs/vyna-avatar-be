@@ -70,6 +70,10 @@ The token server runs on `http://localhost:10001` and provides connection detail
 uv run python src/agent.py console
 ```
 
+## Searching Documentation
+
+Always use Context7 MCP to search the documentation before generate the code from the external libraries.
+
 ## Important Guidelines
 
 **⚠️ Security Notice**: Never hardcode environment variables, API keys, or secrets in source files. Always use `.env.local` for sensitive configuration.

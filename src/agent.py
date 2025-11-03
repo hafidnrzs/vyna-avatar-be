@@ -1,5 +1,7 @@
 import logging
+import uuid
 
+from dataclasses import dataclass, field
 from dotenv import load_dotenv
 from livekit.agents import (
     Agent,
@@ -12,6 +14,7 @@ from livekit.agents import (
     cli,
     metrics,
 )
+from typing import Optional
 from livekit.agents import function_tool, Agent, RunContext
 from livekit.plugins import elevenlabs, noise_cancellation, openai, silero
 from livekit.plugins.turn_detector.multilingual import MultilingualModel
@@ -20,6 +23,36 @@ logger = logging.getLogger("agent")
 
 load_dotenv(".env.local")
 
+@dataclass
+class UserInfo:
+    """Class to represent a user information"""
+    id: str
+    name: str
+    age: int | None
+
+@dataclass
+class UserData:
+    """Class to store user data during a session"""
+    ctx: Optional[JobContext] = None
+    name: str = field(default_factory=str)
+    age: int = field(default_factory=int)
+
+    def set_user_info(self, name: str, age: int) -> UserInfo:
+        """Set user information"""
+        user_info = UserInfo(
+            id=str(uuid.uuid4()),
+            name=name,
+            age=age
+        )
+        self.name = name
+        self.age = age
+        return user_info
+
+    def get_user_info(self) -> Optional[UserInfo]:
+        """Get the user information (name and age)"""
+        if self.name and (self.age is not None):
+            return UserInfo(id=str(uuid.uuid4()), name=self.name, age=self.age)
+        return None
 
 class Assistant(Agent):
     def __init__(self) -> None:
@@ -29,7 +62,11 @@ class Assistant(Agent):
             Your responses are concise, to the point, and without any complex formatting including emojis, asterisks, or other symbols.
             You are curious, friendly, and have a sense of humor.
             
-            Use the lookup_weather function if the user asked about the current weather""",
+            Use the lookup_weather function if the user asked about the current weather.
+            
+            When user ask who they are, use the function get_user_data.
+            And when user introduce their name and age, use the function set_user_data.
+            """,
         )
 
     # To add tools, use the @function_tool decorator.
@@ -48,7 +85,29 @@ class Assistant(Agent):
         logger.info(f"Looking up weather for {location}")
     
         return "sunny with a temperature of 70 degrees."
+    
+    @function_tool
+    async def set_user_data(self, context: RunContext[UserData], name: str, age: int):
+        """Store the user's name and age in this session
+        
+        Args:
+            name: Name of the user
+            age: Age of the user
+        """
+        userdata = context.userdata
+        userdata.set_user_info(name, age)
 
+        return f"Okay, now I will remember your name is {name} and you are {age} year old."
+    
+    @function_tool
+    async def get_user_data(self, context: RunContext[UserData]):
+        """Get the current session user name and age"""
+        userdata = context.userdata
+        user_info = userdata.get_user_info()
+
+        if user_info:
+            return f"Your name: {user_info.name} and your age: {user_info.age}"
+        return "I don't know your name. Please introduce your name and your age"
 
 def prewarm(proc: JobProcess):
     proc.userdata["vad"] = silero.VAD.load()
@@ -62,7 +121,9 @@ async def entrypoint(ctx: JobContext):
     }
 
     # Set up a voice AI pipeline using OpenAI, Cartesia, AssemblyAI, and the LiveKit turn detector
-    session = AgentSession(
+    userdata = UserData(ctx=ctx)
+    session = AgentSession[UserData](
+        userdata=userdata,
         # Speech-to-text (STT) is your agent's ears, turning the user's speech into text that the LLM can understand
         # See all available models at https://docs.livekit.io/agents/models/stt/
         stt=openai.STT(model="gpt-4o-mini-transcribe", detect_language=True),
