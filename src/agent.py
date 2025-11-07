@@ -1,8 +1,9 @@
+import asyncio
 import json
 import logging
 import uuid
 from dataclasses import dataclass, field
-from typing import List, Optional
+from typing import Optional
 
 from dotenv import load_dotenv
 from livekit.agents import (
@@ -24,6 +25,21 @@ from livekit.plugins.turn_detector.multilingual import MultilingualModel
 logger = logging.getLogger("agent")
 
 load_dotenv(".env.local")
+
+# Available illustrations that can be displayed to users
+AVAILABLE_ILLUSTRATIONS = {
+    "pythagoras": {
+        "url": "https://upload.wikimedia.org/wikipedia/commons/thumb/d/d2/Pythagorean.svg/512px-Pythagorean.svg.png",
+        "description": "Pythagorean theorem diagram showing a² + b² = c²",
+        "topics": ["mathematics", "geometry", "pythagoras", "triangle", "theorem"],
+    },
+    "trigonometry": {
+        "url": "https://upload.wikimedia.org/wikipedia/commons/thumb/7/7e/Trigonometry_triangle.svg/800px-Trigonometry_triangle.svg.png",
+        "description": "A trigonometry triangle is a right-angled triangle used as the fundamental scaffold for defining sine, cosine, and tangent",
+        "topics": ["mathematics", "geometry", "trigonometry", "triangle"],
+    },
+    # Add more illustrations here as they become available
+}
 
 
 @dataclass
@@ -51,7 +67,7 @@ class UserData:
     ctx: Optional[JobContext] = None
     name: str = field(default_factory=str)
     age: int = field(default_factory=int)
-    components = List[Component] = field(default_factory=list)
+    components: list[Component] = field(default_factory=list)
 
     def set_user_info(self, name: str, age: int) -> UserInfo:
         """Set user information"""
@@ -100,6 +116,10 @@ class Assistant(Agent):
 
             When user ask who they are, use the function get_user_data.
             And when user introduce their name and age, use the function set_user_data.
+
+            When teaching or explaining visual concepts, use show_illustration to display relevant images or diagrams to help the user understand better.
+            Available illustrations: "pythagoras" (for Pythagorean theorem, geometry, triangles).
+            You can use hide_illustration when you want to clear the display or move to a different topic.
             """,
         )
 
@@ -227,6 +247,131 @@ class Assistant(Agent):
 
         return f"I've toggled the component to {'show' if component.is_showed else 'hide'} the component"
 
+    @function_tool
+    async def show_illustration(
+        self, context: RunContext[UserData], illustration_key: str
+    ):
+        """Show an illustration/image to the user. Use this when you want to display visual aids, diagrams, or educational images.
+
+        Available illustrations:
+        - "pythagoras": Pythagorean theorem diagram (a² + b² = c²) - use for geometry, triangles, mathematics
+        - "trigonometry": Trigonometry - sin, cosine, and tangent
+
+        Args:
+            illustration_key: The key of the illustration to display (e.g., "pythagoras")
+        """
+        userdata = context.userdata
+
+        # Validate illustration key
+        if illustration_key not in AVAILABLE_ILLUSTRATIONS:
+            available_keys = ", ".join(AVAILABLE_ILLUSTRATIONS.keys())
+            return f"I don't have an illustration called '{illustration_key}'. Available illustrations are: {available_keys}"
+
+        illustration = AVAILABLE_ILLUSTRATIONS[illustration_key]
+        image_url = illustration["url"]
+        description = illustration["description"]
+
+        # Get the room from the userdata
+        if not userdata.ctx or not userdata.ctx.room:
+            return "Cannot show illustration: couldn't access the room"
+        room = userdata.ctx.room
+
+        # Get the first participant in the room (should be the client)
+        participants = room.remote_participants
+        if not participants:
+            return "Cannot show illustration: no participants found in the room"
+
+        # Get the first participant from the dictionary of remote participants
+        participant = next(iter(participants.values()), None)
+        if not participant:
+            return "Cannot show illustration: couldn't get the first participant"
+
+        # Prepare and send RPC to show the illustration
+        try:
+            payload = json.dumps({"state": "show", "image_url": image_url})
+            logger.info(f"Sending show illustration payload: {payload}")
+
+            # Wrap RPC call with asyncio timeout to catch errors before Rust panic
+            result = await asyncio.wait_for(
+                room.local_participant.perform_rpc(
+                    destination_identity=participant.identity,
+                    method="client.showIllustration",
+                    payload=payload,
+                ),
+                timeout=4.0,  # Python timeout slightly longer than RPC timeout
+            )
+
+            response = json.loads(result)
+            logger.info(f"[Illustration] Show result: {response}")
+
+            if response.get("ok"):
+                desc_msg = f" showing {description}" if description else ""
+                return f"I've displayed the illustration{desc_msg} to you."
+            else:
+                error = response.get("error", "Unknown error")
+                return f"I tried to show the illustration but encountered an error: {error}"
+
+        except asyncio.TimeoutError:
+            logger.error("Show illustration timed out - frontend may not be ready")
+            return "The illustration request timed out. Please make sure the frontend is connected and try again."
+        except Exception as e:
+            logger.error(f"Failed to show illustration: {e!s}")
+            return "I encountered an error while trying to show the illustration. The frontend may not be ready to receive it."
+
+    @function_tool
+    async def hide_illustration(self, context: RunContext[UserData]):
+        """Hide the currently displayed illustration from the user. Use this when you want to clear the visual display.
+
+        No arguments required.
+        """
+        userdata = context.userdata
+
+        # Get the room from the userdata
+        if not userdata.ctx or not userdata.ctx.room:
+            return "Cannot hide illustration: couldn't access the room"
+        room = userdata.ctx.room
+
+        # Get the first participant in the room (should be the client)
+        participants = room.remote_participants
+        if not participants:
+            return "Cannot hide illustration: no participants found in the room"
+
+        # Get the first participant from the dictionary of remote participants
+        participant = next(iter(participants.values()), None)
+        if not participant:
+            return "Cannot hide illustration: couldn't get the first participant"
+
+        # Prepare and send RPC to hide the illustration
+        try:
+            payload = json.dumps({"state": "hidden"})
+            logger.info(f"Sending hide illustration payload: {payload}")
+
+            # Wrap RPC call with asyncio timeout to catch errors before Rust panic
+            result = await asyncio.wait_for(
+                room.local_participant.perform_rpc(
+                    destination_identity=participant.identity,
+                    method="client.showIllustration",
+                    payload=payload,
+                ),
+                timeout=4.0,  # Python timeout slightly longer than RPC timeout
+            )
+
+            response = json.loads(result)
+            logger.info(f"[Illustration] Hide result: {response}")
+
+            if response.get("ok"):
+                return "I've hidden the illustration."
+            else:
+                error = response.get("error", "Unknown error")
+                return f"I tried to hide the illustration but encountered an error: {error}"
+
+        except asyncio.TimeoutError:
+            logger.error("Hide illustration timed out - frontend may not be ready")
+            return "The hide illustration request timed out. Please make sure the frontend is connected."
+        except Exception as e:
+            logger.error(f"Failed to hide illustration: {e!s}")
+            return "I encountered an error while trying to hide the illustration. The frontend may not be ready."
+
 
 def prewarm(proc: JobProcess):
     proc.userdata["vad"] = silero.VAD.load()
@@ -302,12 +447,6 @@ async def entrypoint(ctx: JobContext):
             logger.error(f"Error handling button click: {e}")
             return f"error: {str(e)}"
 
-    # Register RPC methods - The method names need to match exactly what the client is calling
-    logger.info("Registering RPC methods")
-    ctx.room.local_participant.register_rpc_method(
-        "agent.toggleComponent", handle_toggle_component
-    )
-
     # To use a realtime model instead of a voice pipeline, use the following session setup instead.
     # (Note: This is for the OpenAI Realtime API. For other providers, see https://docs.livekit.io/agents/models/realtime/))
     # 1. Install livekit-agents[openai]
@@ -351,8 +490,14 @@ async def entrypoint(ctx: JobContext):
         ),
     )
 
-    # Join the room and connect to the user
+    # Join the room and connect to the userW
     await ctx.connect()
+
+    # Register RPC methods - The method names need to match exactly what the client is calling
+    logger.info("Registering RPC methods")
+    ctx.room.local_participant.register_rpc_method(
+        "agent.toggleComponent", handle_toggle_component
+    )
 
 
 if __name__ == "__main__":
